@@ -24,26 +24,37 @@
 set -e
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root (e.g. ssh root@<modem> then re-run)" >&2; exit 1; }
 
-# Confirmation gate — never installs blindly. With `curl ... | sh` stdin is the
-# pipe, so the prompt reads the controlling terminal (/dev/tty); a non-TTY run
-# has no one to ask and refuses to proceed.
+# Confirmation gate — never installs blindly. On an interactive terminal the
+# prompt reads /dev/tty (so `curl ... | sh` still works). On a non-TTY run
+# (e.g. `printf '1\n' | ssh root@<modem> 'sh /tmp/install-on-device.sh'`) it
+# reads one line from stdin instead — no pty required, which keeps SSH sessions
+# from being torn down by pty+process-sweep interactions on these modems.
 echo
 echo "This installs the 520 IPv6 fix (6relayd/radvd passthrough) on THIS modem."
 echo "Idempotent — safe to re-run on an already-fixed modem."
 echo
-while :; do
-    printf 'Press 1 to install, 0 to exit: '
-    if ! read -r ans < /dev/tty; then
-        echo
-        echo "No interactive terminal — exiting, nothing was changed." >&2
-        exit 1
-    fi
+if [ -t 0 ]; then
+    while :; do
+        printf 'Press 1 to install, 0 to exit: '
+        if ! read -r ans < /dev/tty; then
+            echo
+            echo "No input — exiting, nothing was changed." >&2
+            exit 1
+        fi
+        case "$ans" in
+            1) break ;;
+            0) echo "Exiting — nothing was changed."; exit 0 ;;
+            *) echo "Invalid choice — press 1 to install or 0 to exit." ;;
+        esac
+    done
+else
+    IFS= read -r ans || { echo "No input — exiting, nothing was changed." >&2; exit 1; }
     case "$ans" in
-        1) break ;;
+        1) : ;;
         0) echo "Exiting — nothing was changed."; exit 0 ;;
-        *) echo "Invalid choice — press 1 to install or 0 to exit." ;;
+        *) echo "Invalid choice or no confirmation — exiting, nothing was changed." >&2; exit 1 ;;
     esac
-done
+fi
 echo "Installing..."
 
 # --- 1. radvd presence -----------------------------------------------------
@@ -397,8 +408,9 @@ systemctl daemon-reload
 systemctl stop rm520-6relayd-watchdog.timer 2>/dev/null || true
 systemctl stop rm520-6relayd.service 2>/dev/null || true
 for p in /proc/[0-9]*; do
-    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || c=
     case "$c" in
+        *tailscaled*|*--cmd=*) : ;; # ssh sessions mirror the remote command in their cmdline — never kill those
         *6relayd-run.sh*|radvd*) kill -9 "${p#/proc/}" 2>/dev/null || true ;;
     esac
 done

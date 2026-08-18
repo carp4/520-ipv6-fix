@@ -14,8 +14,10 @@
 #   * SSH ControlMaster: one auth (key or password) covers all hops. On
 #     builds with broken pubkey auth (home dir/StrictModes), sshpass can
 #     supply the password once:  sshpass -p 'PASSWORD' ./install-ipv6-fix.sh IP
-#   * The interactive gate (press 1) runs on the modem; a non-TTY session
-#     refuses to install.
+#   * The interactive gate (press 1) runs on the modem; on a non-TTY session
+#     the installer reads one confirmation line from stdin (fed here), so no
+#     pty is needed — non-TTY runs are also immune to the pty/process-sweep
+#     teardown seen on these modems.
 #   * Everything else (radvd install, unit-dir detect, legacy cleanup,
 #     verification) is handled by the on-device installer itself.
 
@@ -33,8 +35,8 @@ $SSH "$USER@$IP" '[ "$(id -u)" = 0 ] || { echo "ERROR: need a root login (ssh ro
 echo "==> pushing on-device installer"
 $SSH "$USER@$IP" 'cat > /tmp/install-on-device.sh' < "$DIR/install-on-device.sh"
 
-echo "==> running installer on the modem (interactive — press 1)"
-$SSH -t "$USER@$IP" 'sh /tmp/install-on-device.sh'
+echo "==> running installer on the modem"
+printf '1\n' | $SSH "$USER@$IP" 'sh /tmp/install-on-device.sh'
 
 echo "==> cleaning up + closing mux"
 $SSH "$USER@$IP" 'rm -f /tmp/install-on-device.sh' 2>/dev/null || true
