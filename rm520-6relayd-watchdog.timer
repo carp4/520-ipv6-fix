@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the 6relayd watchdog every minute
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

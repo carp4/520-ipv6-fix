@@ -1,0 +1,6 @@
+[Unit]
+Description=6relayd IPv6 passthrough watchdog
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usrdata/at-stock-ui/6relayd-watchdog.sh

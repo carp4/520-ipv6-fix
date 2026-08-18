@@ -1,0 +1,5 @@
+# Windows ADS artifacts from WSL/Explorer copies
+*:Zone.Identifier
+
+# Friend-specific repair tool — not published
+fix-520-ipv6.sh

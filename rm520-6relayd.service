@@ -1,0 +1,11 @@
+[Unit]
+Description=RM520 IPv6 passthrough (6relayd)
+After=network.target
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+ExecStart=/bin/sh /usrdata/at-stock-ui/6relayd-run.sh --systemd
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
