@@ -23,38 +23,48 @@
 
 set -e
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root (e.g. ssh root@<modem> then re-run)" >&2; exit 1; }
+command -v systemctl >/dev/null 2>&1 || { echo "ERROR: systemctl not found — this does not look like the expected firmware rootfs." >&2; exit 1; }
 
-# Confirmation gate — never installs blindly. On an interactive terminal the
-# prompt reads /dev/tty (so `curl ... | sh` still works). On a non-TTY run
-# (e.g. `printf '1\n' | ssh root@<modem> 'sh /tmp/install-on-device.sh'`) it
-# reads one line from stdin instead — no pty required, which keeps SSH sessions
-# from being torn down by pty+process-sweep interactions on these modems.
+# Confirmation gate — never installs blindly. Input sources, in order:
+#   1. interactive stdin ([ -t 0 ], e.g. `adb shell` or a local root shell
+#      running the script file) — prompt and read stdin directly;
+#   2. /dev/tty (e.g. `curl ... | sh` pasted at a terminal: stdin is the curl
+#      pipe, so the prompt reads the controlling terminal instead);
+#   3. one line from stdin on a non-TTY run (e.g.
+#      `printf '1\n' | ssh root@<modem> 'sh /tmp/install-on-device.sh'`).
+# A non-TTY `curl ... | sh` (stdin = script text) gets one read, fails the
+# check, and refuses — it never installs blindly.
 echo
 echo "This installs the 520 IPv6 fix (6relayd/radvd passthrough) on THIS modem."
 echo "Idempotent — safe to re-run on an already-fixed modem."
 echo
-if [ -t 0 ]; then
-    while :; do
-        printf 'Press 1 to install, 0 to exit: '
-        if ! read -r ans < /dev/tty; then
-            echo
-            echo "No input — exiting, nothing was changed." >&2
-            exit 1
-        fi
-        case "$ans" in
-            1) break ;;
-            0) echo "Exiting — nothing was changed."; exit 0 ;;
-            *) echo "Invalid choice — press 1 to install or 0 to exit." ;;
-        esac
-    done
-else
-    IFS= read -r ans || { echo "No input — exiting, nothing was changed." >&2; exit 1; }
+while :; do
+    printf 'Press 1 to install, 0 to exit: '
+    if [ -t 0 ]; then
+        read -r ans || { echo; echo "No input — exiting, nothing was changed." >&2; exit 1; }
+        interactive=1
+    elif read -r ans < /dev/tty 2>/dev/null; then
+        interactive=1
+    elif IFS= read -r ans; then
+        interactive=0
+    else
+        echo
+        echo "No input — exiting, nothing was changed." >&2
+        exit 1
+    fi
     case "$ans" in
-        1) : ;;
+        1) break ;;
         0) echo "Exiting — nothing was changed."; exit 0 ;;
-        *) echo "Invalid choice or no confirmation — exiting, nothing was changed." >&2; exit 1 ;;
+        *)
+            if [ "$interactive" = 1 ]; then
+                echo "Invalid choice — press 1 to install or 0 to exit."
+            else
+                echo "Invalid choice or no confirmation — exiting, nothing was changed." >&2
+                exit 1
+            fi
+            ;;
     esac
-fi
+done
 echo "Installing..."
 
 # --- 1. radvd presence -----------------------------------------------------

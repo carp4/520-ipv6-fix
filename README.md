@@ -48,9 +48,10 @@ curl -fsSL https://raw.githubusercontent.com/carp4/520-ipv6-fix/main/install-on-
 
 - SSH into the modem as root first, then paste the line.
 - It asks for confirmation first (**1** = install, **0** = exit) and never
-  installs blindly — on an interactive terminal it prompts on /dev/tty, on a
-  non-TTY run (e.g. `printf '1\n' | ssh root@<modem> 'sh /tmp/install-on-device.sh'`)
-  it reads one confirmation line from stdin, so no pty is required.
+  installs blindly: it prompts on the interactive terminal (root shell,
+  `adb shell`, or `curl ... | sh` pasted at a terminal), and a non-TTY run
+  (e.g. `printf '1\n' | ssh root@<modem> 'sh /tmp/install-on-device.sh'`)
+  accepts one confirmation line from stdin, so no pty is required.
 - Idempotent — safe to re-run on an already-fixed modem.
 - **No reboot required.** The service starts immediately and survives
   reboots (persistent rootfs + manual wants symlinks, see below).
