@@ -136,6 +136,7 @@ start_radvd() {
     RPID=$(cat "$RADVD_PID" 2>/dev/null)
     [ -n "$RPID" ] && kill "$RPID" 2>/dev/null
     for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
         case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in
             radvd*) kill "${p#/proc/}" 2>/dev/null ;;
         esac

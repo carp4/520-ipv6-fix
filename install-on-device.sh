@@ -243,6 +243,7 @@ start_radvd() {
     RPID=$(cat "$RADVD_PID" 2>/dev/null)
     [ -n "$RPID" ] && kill "$RPID" 2>/dev/null
     for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
         case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in
             radvd*) kill "${p#/proc/}" 2>/dev/null ;;
         esac
@@ -447,6 +448,7 @@ systemctl daemon-reload
 systemctl stop rm520-6relayd-watchdog.timer 2>/dev/null || true
 systemctl stop rm520-6relayd.service 2>/dev/null || true
 for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
     c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || c=
     case "$c" in
         *tailscaled*|*--cmd=*) : ;; # ssh sessions mirror the remote command in their cmdline — never kill those
