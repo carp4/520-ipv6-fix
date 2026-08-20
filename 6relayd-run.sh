@@ -146,6 +146,16 @@ start_radvd() {
     # Fail loud into the log instead so the failure is visible in one place.
     if radvd -c -C "$RADVD_CONF" >>/tmp/lp-radvd.log 2>&1; then
         setsid sh -c "radvd -n -C $RADVD_CONF -p $RADVD_PID" </dev/null >>/tmp/lp-radvd.log 2>&1 &
+        # radvd writes its pidfile shortly after start. The launch is async,
+        # and the keepalive runs immediately after this returns — if it sees
+        # "no pidfile" it starts a SECOND daemon, which then fails the pidfile
+        # lock and keeps advertising anyway (duplicate RAs). Wait for the
+        # pidfile so the keepalive can never observe the gap.
+        _i=0
+        while [ "$_i" -lt 50 ] && [ ! -s "$RADVD_PID" ]; do
+            sleep 0.1
+            _i=$((_i + 1))
+        done
     else
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)] radvd config check FAILED — not starting" >> /tmp/lp-radvd.log
     fi
