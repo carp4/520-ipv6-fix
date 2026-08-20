@@ -58,6 +58,15 @@ for _w in rmnet_data0 rmnet_data1 rmnet_data2; do
 done
 LAN=bridge0
 RADVD_CONF=/tmp/lp-radvd.conf
+# Pidfile path is explicit, not radvd's compiled-in default: Entware's radvd
+# (opkg-installed, seen as both 2.18 and 2.20 across units) writes to
+# /opt/var/run/radvd.pid on some builds and /var/run/radvd.pid on others,
+# depending on how it was configured/packaged. Trusting /var/run/radvd.pid
+# unconditionally made the keepalive below see "no pidfile" on units where
+# radvd actually used /opt/var/run — it always concluded radvd was dead and
+# killed+restarted a perfectly healthy daemon every 10s, forever. -p pins
+# the path so start and keepalive always agree, regardless of the build.
+RADVD_PID=/tmp/lp-radvd.pid
 
 # Prefix state is PERSISTED. It used to live only in the shell variable LAST, which meant
 # the renumbering withdrawal below fired only for a re-dial observed while this process was
@@ -121,10 +130,10 @@ CONF
 start_radvd() {
     # Stop any existing radvd via its pidfile, then sweep /proc as a fallback
     # (pkill -f is unreliable on this firmware — it matched nothing all day —
-    # and a stray second radvd advertises duplicate RAs). radvd writes
-    # /var/run/radvd.pid even in -n mode and locks it, so the pidfile is the
-    # authoritative handle.
-    RPID=$(cat /var/run/radvd.pid 2>/dev/null)
+    # and a stray second radvd advertises duplicate RAs). The pidfile is
+    # pinned by -p at launch (see RADVD_PID above), so this is the
+    # authoritative handle on every radvd build.
+    RPID=$(cat "$RADVD_PID" 2>/dev/null)
     [ -n "$RPID" ] && kill "$RPID" 2>/dev/null
     for p in /proc/[0-9]*; do
         case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in
@@ -136,7 +145,7 @@ start_radvd() {
     # race before the single-instance guard shipped) made radvd exit silently.
     # Fail loud into the log instead so the failure is visible in one place.
     if radvd -c -C "$RADVD_CONF" >>/tmp/lp-radvd.log 2>&1; then
-        setsid sh -c "radvd -n -C $RADVD_CONF" </dev/null >>/tmp/lp-radvd.log 2>&1 &
+        setsid sh -c "radvd -n -C $RADVD_CONF -p $RADVD_PID" </dev/null >>/tmp/lp-radvd.log 2>&1 &
     else
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)] radvd config check FAILED — not starting" >> /tmp/lp-radvd.log
     fi
@@ -192,7 +201,7 @@ while :; do
         fi
         # Keepalive via radvd's own pidfile (kill -0) — a pgrep pattern match
         # was unreliable here and let a dead radvd look alive.
-        RPID=$(cat /var/run/radvd.pid 2>/dev/null)
+        RPID=$(cat "$RADVD_PID" 2>/dev/null)
         if [ -z "$RPID" ] || ! kill -0 "$RPID" 2>/dev/null; then
             start_radvd
         fi

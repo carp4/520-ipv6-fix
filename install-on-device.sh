@@ -1,7 +1,7 @@
 #!/bin/sh
 # install-on-device.sh — self-contained on-device installer for the 520 IPv6 fix.
 #
-# Runs ON the RM520N / RM521F / RM550V / RM551E modem (root shell). Idempotent —
+# Runs ON the RM520N-GL modem (root shell via SSH or ADB). Idempotent —
 # safe to re-run on an already-fixed modem, and harmless on a fixed one.
 #
 # Generated from the repo sources — do not hand-edit; regenerate instead.
@@ -9,17 +9,16 @@
 # What it does:
 #   1. installs radvd if missing (some firmware builds ship without it)
 #   2. installs 6relayd-run.sh + 6relayd-watchdog.sh into /usrdata/at-stock-ui/
-#   3. detects the unit dir: /lib/systemd/system when writable, else
-#      /etc/systemd/system (hard read-only rootfs builds scan /etc at boot)
-#   4. installs unit files + wants symlinks into the detected dir; on writable
-#      builds removes /etc shadow copies (they would override /lib)
+#   3. installs units + wants symlinks into /lib/systemd/system, remounting
+#      the rootfs rw when needed (some builds mount /etc as a separate LATE
+#      UBI volume — wants symlinks there are silently ignored at boot)
+#   4. keeps identical /etc mirror copies (OTA recovery source)
 #   5. retires the legacy "lettucepi" units (original install's names) so they
 #      cannot run 6relayd-run.sh concurrently with the service
 #   6. installs the post-OTA reapply script into /usrdata/scripts/
 #   7. daemon-reload, starts service + watchdog timer, verifies
 #
-# This is NOT the old IPv6ExtRouterMode fix (that one bricked 3 modems).
-# This is the radvd passthrough recipe proven on production RM520N units.
+# This is the radvd passthrough recipe proven on production RM520N-GL units.
 
 set -e
 [ "$(id -u)" = 0 ] || { echo "ERROR: run as root (e.g. ssh root@<modem> then re-run)" >&2; exit 1; }
@@ -83,10 +82,21 @@ if ! command -v radvd >/dev/null 2>&1; then
 fi
 echo "==> radvd: $(command -v radvd)"
 
-# --- 2. unit dir detect ----------------------------------------------------
+# --- 2. unit dir -----------------------------------------------------------
+# Units MUST live in /lib (the rootfs): several builds mount /etc as a
+# separate, LATE UBI volume, and boot systemd only processes what it sees at
+# boot — wants symlinks in /etc are silently ignored there (units come back
+# "inactive (dead)" with NRestarts=0 after every reboot). On builds where
+# /lib looks read-only, remount the rootfs rw and retry (the QManager and
+# Entware toolkits write to /lib the same way); /etc remains an absolute
+# last resort.
 UNITDIR=/lib/systemd/system
 if ! (touch "$UNITDIR/.rwtest" 2>/dev/null && rm -f "$UNITDIR/.rwtest"); then
-    UNITDIR=/etc/systemd/system
+    mount -o remount,rw / 2>/dev/null || true
+    if ! (touch "$UNITDIR/.rwtest" 2>/dev/null && rm -f "$UNITDIR/.rwtest"); then
+        UNITDIR=/etc/systemd/system
+        echo "==> WARNING: /lib unwritable even after rootfs remount — units go to $UNITDIR; boot auto-start is NOT guaranteed on late-mount-/etc builds"
+    fi
 fi
 echo "==> unit dir: $UNITDIR"
 
@@ -155,6 +165,15 @@ for _w in rmnet_data0 rmnet_data1 rmnet_data2; do
 done
 LAN=bridge0
 RADVD_CONF=/tmp/lp-radvd.conf
+# Pidfile path is explicit, not radvd's compiled-in default: Entware's radvd
+# (opkg-installed, seen as both 2.18 and 2.20 across units) writes to
+# /opt/var/run/radvd.pid on some builds and /var/run/radvd.pid on others,
+# depending on how it was configured/packaged. Trusting /var/run/radvd.pid
+# unconditionally made the keepalive below see "no pidfile" on units where
+# radvd actually used /opt/var/run — it always concluded radvd was dead and
+# killed+restarted a perfectly healthy daemon every 10s, forever. -p pins
+# the path so start and keepalive always agree, regardless of the build.
+RADVD_PID=/tmp/lp-radvd.pid
 
 # Prefix state is PERSISTED. It used to live only in the shell variable LAST, which meant
 # the renumbering withdrawal below fired only for a re-dial observed while this process was
@@ -218,10 +237,10 @@ CONF
 start_radvd() {
     # Stop any existing radvd via its pidfile, then sweep /proc as a fallback
     # (pkill -f is unreliable on this firmware — it matched nothing all day —
-    # and a stray second radvd advertises duplicate RAs). radvd writes
-    # /var/run/radvd.pid even in -n mode and locks it, so the pidfile is the
-    # authoritative handle.
-    RPID=$(cat /var/run/radvd.pid 2>/dev/null)
+    # and a stray second radvd advertises duplicate RAs). The pidfile is
+    # pinned by -p at launch (see RADVD_PID above), so this is the
+    # authoritative handle on every radvd build.
+    RPID=$(cat "$RADVD_PID" 2>/dev/null)
     [ -n "$RPID" ] && kill "$RPID" 2>/dev/null
     for p in /proc/[0-9]*; do
         case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in
@@ -233,7 +252,7 @@ start_radvd() {
     # race before the single-instance guard shipped) made radvd exit silently.
     # Fail loud into the log instead so the failure is visible in one place.
     if radvd -c -C "$RADVD_CONF" >>/tmp/lp-radvd.log 2>&1; then
-        setsid sh -c "radvd -n -C $RADVD_CONF" </dev/null >>/tmp/lp-radvd.log 2>&1 &
+        setsid sh -c "radvd -n -C $RADVD_CONF -p $RADVD_PID" </dev/null >>/tmp/lp-radvd.log 2>&1 &
     else
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)] radvd config check FAILED — not starting" >> /tmp/lp-radvd.log
     fi
@@ -289,7 +308,7 @@ while :; do
         fi
         # Keepalive via radvd's own pidfile (kill -0) — a pgrep pattern match
         # was unreliable here and let a dead radvd look alive.
-        RPID=$(cat /var/run/radvd.pid 2>/dev/null)
+        RPID=$(cat "$RADVD_PID" 2>/dev/null)
         if [ -z "$RPID" ] || ! kill -0 "$RPID" 2>/dev/null; then
             start_radvd
         fi
@@ -425,12 +444,12 @@ for p in /proc/[0-9]*; do
     esac
 done
 sleep 1
-rm -f /tmp/6relayd.pid /tmp/lp-radvd.conf /usrdata/at-stock-ui/ipv6.prefix /usrdata/at-stock-ui/ipv6.stale /tmp/lp-radvd.log /var/run/radvd.pid
+rm -f /tmp/6relayd.pid /tmp/lp-radvd.conf /tmp/lp-radvd.pid /usrdata/at-stock-ui/ipv6.prefix /usrdata/at-stock-ui/ipv6.stale /tmp/lp-radvd.log
 systemctl start rm520-6relayd.service
 systemctl start rm520-6relayd-watchdog.timer
 sleep 5
 echo "relay: $(systemctl is-active rm520-6relayd.service) timer: $(systemctl is-active rm520-6relayd-watchdog.timer)"
-RPID=$(cat /var/run/radvd.pid 2>/dev/null)
+RPID=$(cat /tmp/lp-radvd.pid 2>/dev/null)
 if [ -n "$RPID" ] && kill -0 "$RPID" 2>/dev/null; then
     echo "radvd: running (pid $RPID)"
 else

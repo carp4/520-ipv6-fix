@@ -5,7 +5,7 @@
 #         ./install-ipv6-fix.sh 192.168.1.1
 #
 # Pushes install-on-device.sh (the self-contained installer) to an
-# RM520N / RM521F / RM550V / RM551E modem over SSH and runs it there.
+# RM520N-GL modem over SSH and runs it there.
 # Idempotent — safe to re-run on an already-fixed modem.
 #
 # Notes:
