@@ -3,3 +3,6 @@
 
 # Friend-specific repair tool — not published
 fix-520-ipv6.sh
+
+# Fleet identity map — contains private IPs, never publish
+FLEET.md
