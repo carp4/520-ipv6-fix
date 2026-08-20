@@ -6,3 +6,6 @@ fix-520-ipv6.sh
 
 # Fleet identity map — contains private IPs, never publish
 FLEET.md
+
+# Private operator rules — local only, never publish
+AGENTS.md
