@@ -1,10 +1,10 @@
 # 520 IPv6 Fix — 6relayd / radvd passthrough
 
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-RM520N%20family-orange)
+![Platform](https://img.shields.io/badge/platform-RM520N--GL-orange)
 ![Install](https://img.shields.io/badge/install-one%20line-blue)
 
-Fixes the **"silent IPv6 death"** on Quectel RM520N-family modems: the stock
+Fixes the **"silent IPv6 death"** on the Quectel RM520N-GL: the stock
 QCMAP-managed radish keeps running but silently stops sending Router
 Advertisements, so LAN clients never get — or never keep — a global IPv6
 address.
@@ -33,12 +33,12 @@ that:
 
 ## Requirements
 
-- Quectel **RM520N / RM521F / RM550V / RM551E** modem with SSH root access
+- Quectel **RM520N-GL** modem with SSH or ADB root access
 - **radvd** — the installer auto-installs it via opkg (Entware) if the
   firmware build shipped without it
-- Your carrier must **route a /64 to the modem** (T-Mobile does this — this
-  fix was developed against it). If your carrier hands out only a single
-  address or an on-link /64, the routed-passthrough model doesn't apply.
+- Your carrier must **route a /64 to the modem** (verified across T-Mobile,
+  Verizon, and AT&T). If your carrier hands out only a single address or an
+  on-link /64, the routed-passthrough model doesn't apply.
 
 ## Install — one command, run ON the modem
 
@@ -64,29 +64,27 @@ Prefer deploying from a laptop? The repo also ships a one-shot SSH driver:
 
 ## CRITICAL: how boot persistence works on this firmware
 
-Firmware builds differ in what the boot systemd scans:
+The units always live in **`/lib/systemd/system/`** (the rootfs). The
+installer remounts the rootfs rw if it looks read-only. This matters because
+on these firmware builds `/etc` is a separate UBI volume that mounts **after**
+systemd has processed the boot transaction — `systemctl enable` writes into
+`/etc/systemd/system/*.wants/`, which boot systemd never scans, so units
+enabled there silently never start (observed: enabled + symlink present +
+reboot → `inactive (dead)`, `NRestarts=0`). Enabling is therefore done by
+**manual wants symlinks in `/lib`**, and `systemctl is-enabled` will lie.
 
-- Builds with a **writable `/lib`** use the units in
-  `/lib/systemd/system/` + manual wants symlinks there. `systemctl enable`
-  writes into `/etc/systemd/system/*.wants/` — which **these builds never
-  scan at boot** — so enabling is done by symlink, not by `systemctl enable`.
-  (`systemctl is-enabled` will lie for the same reason.)
-- Builds with a **hard read-only `/lib`** (some newer RM520NGL images) scan
-  `/etc/systemd/system/` at boot instead — the installer detects the unit
-  dir with a writability probe and puts the units + wants symlinks there.
-
-Either way the installer handles it. On writable builds it also keeps
-**identical mirror copies in `/etc/systemd/system/`**: systemd prefers /etc
-over /lib, but identical copies make that preference harmless, and the /etc
-copies are what survive an OTA that wipes `/lib` — they're the reapply
-script's recovery source. Never let the two diverge.
+The installer also keeps **identical mirror copies in
+`/etc/systemd/system/`**: systemd prefers /etc over /lib, but identical
+copies make that preference harmless, and the /etc copies are what survive
+an OTA that wipes `/lib` — they're the reapply script's recovery source.
+Never let the two diverge.
 
 ## Verify
 
 ```sh
 systemctl is-active rm520-6relayd.service        # active
 systemctl is-active rm520-6relayd-watchdog.timer # active
-cat /var/run/radvd.pid                           # radvd pid (alive)
+cat /tmp/lp-radvd.pid                            # radvd pid (alive)
 radvd -c -C /tmp/lp-radvd.conf                   # config: syntax ok
 cat /usrdata/at-stock-ui/ipv6.prefix             # current carrier /64
 ip -6 addr show bridge0                          # globals being served
@@ -122,7 +120,7 @@ rm /lib/systemd/system/rm520-6relayd.service \
    /etc/systemd/system/rm520-6relayd-watchdog.timer
 systemctl daemon-reload
 systemctl stop rm520-6relayd.service rm520-6relayd-watchdog.timer 2>/dev/null
-[ -f /var/run/radvd.pid ] && kill "$(cat /var/run/radvd.pid)" 2>/dev/null
+[ -f /tmp/lp-radvd.pid ] && kill "$(cat /tmp/lp-radvd.pid)" 2>/dev/null
 rm -f /tmp/lp-radvd.conf
 ```
 
@@ -142,9 +140,7 @@ rm -f /tmp/lp-radvd.conf
 
 ## Notes
 
-- This is **not** the old `IPv6ExtRouterMode` fix — that one bricked 3
-  modems and is abandoned.
-- Developed against T-Mobile (whole-/64 routed to the modem). Other
-  carriers may behave differently.
+- Verified across T-Mobile, Verizon, and AT&T (whole-/64 routed to the
+  modem). Other carriers may behave differently.
 - License: MIT — use it, fix it, share it. No warranty, and test on a unit
   you can afford to reboot before trusting it with your main line.
